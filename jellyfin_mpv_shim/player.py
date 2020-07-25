@@ -104,6 +104,8 @@ class PlayerManager(object):
                                **extra_options)
         self.menu = OSDMenu(self)
 
+        self._player['demuxer-max-bytes'] = '800000000';
+
         if hasattr(self._player, 'osc'):
             self._player.osc = settings.enable_osc
         else:
