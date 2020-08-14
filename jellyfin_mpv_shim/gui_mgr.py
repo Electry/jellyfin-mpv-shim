@@ -12,6 +12,8 @@ from .constants import USER_APP_NAME, APP_NAME
 from .conffile import confdir
 from .clients import clientManager
 from .utils import get_resource
+from .log_utils import CustomFormatter
+from .i18n import _
 
 log = logging.getLogger('gui_mgr')
 
@@ -59,7 +61,7 @@ class GUILogHandler(logging.Handler):
                 pass
 
 guiHandler = GUILogHandler()
-guiHandler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)8s] %(message)s"))
+guiHandler.setFormatter(CustomFormatter())
 root_logger.addHandler(guiHandler)
 
 # Why am I using another process for the GUI windows?
@@ -131,7 +133,7 @@ class LoggerWindowProcess(Process):
         self.tk = tk
         root = tk.Tk()
         self.root = root
-        root.title("Application Log")
+        root.title(_("Application Log"))
         text = tk.Text(root)
         text.pack(side=tk.LEFT, fill=tk.BOTH, expand = tk.YES)
         text.config(wrap=tk.WORD)
@@ -169,7 +171,7 @@ class PreferencesWindow(threading.Thread):
                     else:
                         self.handle("error")
                 except Exception:
-                    log.error("Error while adding server.", exc_info=1)
+                    log.error("Error while adding server.", exc_info=True)
                     self.handle("error")
             elif action == "remove":
                 clientManager.remove_client(param)
@@ -205,7 +207,9 @@ class PreferencesWindowProcess(Process):
                     self.add_button.config(state=self.tk.NORMAL)
                     self.remove_button.config(state=self.tk.NORMAL)
                 elif action == "error":
-                    self.messagebox.showerror("Add Server", "Could not add server.\nPlease check your connection infomation.")
+                    self.messagebox.showerror(
+                        _("Add Server"),
+                        _("Could not add server.\nPlease check your connection infomation."))
                     self.add_button.config(state=self.tk.NORMAL)
                 elif action == "die":
                     self.root.destroy()
@@ -221,7 +225,7 @@ class PreferencesWindowProcess(Process):
         self.serverList.set(["{0} ({1}, {2})".format(
                 server["Name"],
                 server["username"],
-                "Ok" if server["connected"] else "Fail"
+                _("Ok") if server["connected"] else _("Fail")
             ) for server in self.servers])
 
     def run(self):
@@ -230,7 +234,7 @@ class PreferencesWindowProcess(Process):
         self.tk = tk
         self.messagebox = messagebox
         root = tk.Tk()
-        root.title("Server Configuration")
+        root.title(_("Server Configuration"))
         self.root = root
 
         self.servers = {}
@@ -238,7 +242,7 @@ class PreferencesWindowProcess(Process):
         self.serverList = tk.StringVar(value=[])
         self.current_uuid = None
 
-        def serverSelect(_):
+        def serverSelect(_x):
             idxs = serverlist.curselection()
             if len(idxs)==1:
                 self.current_uuid = self.server_ids[idxs[0]]
@@ -253,17 +257,17 @@ class PreferencesWindowProcess(Process):
         c.grid_columnconfigure(0, weight=1)
         c.grid_rowconfigure(4, weight=1)
 
-        servername_label = ttk.Label(c, text='Server:')
+        servername_label = ttk.Label(c, text=_('Server:'))
         servername_label.grid(column=1, row=0, sticky=tk.E)
         self.servername = tk.StringVar()
         servername_box = ttk.Entry(c, textvariable=self.servername)
         servername_box.grid(column=2, row=0)
-        username_label = ttk.Label(c, text='Username:')
+        username_label = ttk.Label(c, text=_('Username:'))
         username_label.grid(column=1, row=1, sticky=tk.E)
         self.username = tk.StringVar()
         username_box = ttk.Entry(c, textvariable=self.username)
         username_box.grid(column=2, row=1)
-        password_label = ttk.Label(c, text='Password:')
+        password_label = ttk.Label(c, text=_('Password:'))
         password_label.grid(column=1, row=2, sticky=tk.E)
         self.password = tk.StringVar()
         password_box = ttk.Entry(c, textvariable=self.password, show="*")
@@ -284,11 +288,11 @@ class PreferencesWindowProcess(Process):
         def close():
             self.r_queue.put(("die", None))
 
-        self.add_button = ttk.Button(c, text='Add Server', command=add_server)
+        self.add_button = ttk.Button(c, text=_('Add Server'), command=add_server)
         self.add_button.grid(column=2, row=3, pady=5, sticky=tk.E)
-        self.remove_button = ttk.Button(c, text='Remove Server', command=remove_server)
+        self.remove_button = ttk.Button(c, text=_('Remove Server'), command=remove_server)
         self.remove_button.grid(column=1, row=4, padx=5, pady=10, sticky=(tk.E, tk.S))
-        close_button = ttk.Button(c, text='Close', command=close)
+        close_button = ttk.Button(c, text=_('Close'), command=close)
         close_button.grid(column=2, row=4, pady=10, sticky=(tk.E, tk.S))
 
         serverlist.bind('<<ListboxSelect>>', serverSelect)
@@ -384,14 +388,19 @@ class STrayProcess(Process):
             return wrapper
 
         def die():
-            self.icon_stop()
+            # We don't call self.icon_stop() because it crashes on Linux now...
+            if sys.platform == "linux":
+                # This kills the status icon uncleanly.
+                self.r_queue.put(("die", None))
+            else:
+                self.icon_stop()
 
         menu_items = [
-            MenuItem("Configure Servers", get_wrapper("show_preferences")),
-            MenuItem("Show Console", get_wrapper("show_console")),
-            MenuItem("Application Menu", get_wrapper("open_player_menu")),
-            MenuItem("Open Config Folder", get_wrapper("open_config_brs")),
-            MenuItem("Quit", die)
+            MenuItem(_("Configure Servers"), get_wrapper("show_preferences")),
+            MenuItem(_("Show Console"), get_wrapper("show_console")),
+            MenuItem(_("Application Menu"), get_wrapper("open_player_menu")),
+            MenuItem(_("Open Config Folder"), get_wrapper("open_config_brs")),
+            MenuItem(_("Quit"), die)
         ]
 
         icon = Icon(USER_APP_NAME, menu=Menu(*menu_items))

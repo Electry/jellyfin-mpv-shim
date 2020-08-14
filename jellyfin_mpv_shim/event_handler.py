@@ -18,6 +18,7 @@ NAVIGATION_DICT = {
     "MoveRight": "right",
     "MoveLeft": "left",
     "GoHome": "home",
+    "GoToSettings": "home"
 }
 
 def bind(event_name):
@@ -60,6 +61,8 @@ class EventHandler(object):
                     os.system(settings.pre_media_cmd)
                 playerManager.play(video, offset)
                 timelineManager.SendTimeline()
+                if arguments.get("SyncPlayGroup") is not None:
+                    playerManager.syncplay.join_group(arguments["SyncPlayGroup"])
         elif play_command == "PlayLast":
             playerManager._video.parent.insert_items(arguments.get("ItemIds"), append=True)
             playerManager.upd_player_hide()
@@ -84,7 +87,7 @@ class EventHandler(object):
             timelineManager.delay_idle()
             if self.mirror:
                 self.mirror.DisplayContent(client, arguments)
-        elif command in ("Back", "Select", "MoveUp", "MoveDown", "MoveRight", "MoveRight", "GoHome"):
+        elif command in ("Back", "Select", "MoveUp", "MoveDown", "MoveRight", "MoveRight", "GoHome", "GoToSettings"):
             playerManager.menu.menu_action(NAVIGATION_DICT[command])
         elif command in ("Mute", "Unmute"):
             playerManager.set_mute(command == "Mute")
@@ -110,11 +113,22 @@ class EventHandler(object):
         elif command == "Stop":
             playerManager.stop()
         elif command == "Seek":
-            playerManager.seek(arguments.get("SeekPositionTicks") / 10000000)
+            playerManager.seek(arguments.get("SeekPositionTicks") / 10000000, absolute=True)
 
     @bind("PlayPause")
     def pausePlay(self, client, event_name, arguments):
         playerManager.toggle_pause()
         timelineManager.SendTimeline()
+
+    @bind("SyncPlayGroupUpdate")
+    def sync_play_group_update(self, client, event_name, arguments):
+        playerManager.syncplay.client = client
+        playerManager.syncplay.process_group_update(arguments)
+
+    @bind("SyncPlayCommand")
+    def sync_play_command(self, client, event_name, arguments):
+        playerManager.syncplay.client = client
+        playerManager.syncplay.process_command(arguments)
+
 
 eventHandler = EventHandler()

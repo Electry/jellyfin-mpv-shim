@@ -44,9 +44,8 @@ bare IP addresses and not specifying the port by default. If you want to connect
 
 ### Menu
 
-To open the menu, press **c** on your computer. Depending on what app you are
-using to control Jellyfin, you may also be able to open the menu using that app.
-The web application currently doesn't have the required buttons to do so.
+To open the menu, press **c** on your computer or use the navigation controls
+in the mobile/web app.
 
 The menu enables you to:
  - Adjust video transcoding quality.
@@ -54,6 +53,9 @@ The menu enables you to:
  - Change subtitles or audio, while knowing the track names.
  - Change subtitles or audio for an entire series at once.
  - Mark the media as unwatched and quit.
+ - Enable and disable SyncPlay.
+ - Configure shader packs and SVP profiles.
+ - Take screenshots.
 
 On your computer, use the arrow keys, enter, and escape to navigate. On your phone, use
 the arrow buttons, ok, back, and home to navigate.
@@ -61,6 +63,26 @@ the arrow buttons, ok, back, and home to navigate.
 Please also note that the on-screen controller for MPV (if available) cannot change the
 audio and subtitle track configurations for transcoded media. It also cannot load external
 subtitles. You must either use the menu or the application you casted from.
+
+### Shader Packs 
+
+Shader packs are a recent feature addition that allows you to easily use advanced video
+shaders and video quality settings. These usually require a lot of configuration to use,
+but MPV Shim's default shader pack comes with [FSRCNNX](https://github.com/igv/FSRCNN-TensorFlow)
+and [Anime4K](https://github.com/bloc97/Anime4K) preconfigured. Try experimenting with video
+profiles! It may greatly improve your experience.
+
+Shader Packs are ready to use as of the most recent MPV Shim version. To use, simply
+navigate to the **Video Playback Profiles** option and select a profile.
+
+For details on the shader settings, please see [default-shader-pack](https://github.com/iwalton3/default-shader-pack).
+If you would like to customize the shader pack, there are details in the configuration section.
+
+### SVP Integration
+
+SVP integration allows you to easily configure SVP support, change profiles, and enable/disable
+SVP without having to exit the player. It is not enabled by default, please see the configuration
+instructions for instructions on how to enable it.
 
 ### Display Mirroring
 
@@ -120,6 +142,9 @@ You can adjust the basic transcoder settings via the menu.
 
 - `always_transcode` - This will tell the client to always transcode. Default: `false`
     - This may be useful if you are using limited hardware that cannot handle advanced codecs.
+    - Please note that Jellyfin may still direct play files that meet the transcode profile
+      requirements. There is nothing I can do on my end to disable this, but you can reduce
+      the bandwidth setting to force a transcode.
 - `transcode_h265` - Force transcode HEVC videos to h264. Default: `false`
 - `transcode_hi10p` - Force transcode 10 bit color videos to 8 bit color. Default: `false`
 - `remote_kbps` - Bandwidth to permit for remote streaming. Default: `10000`
@@ -190,6 +215,59 @@ You can reconfigure the custom keyboard shortcuts. You can also set them to `nul
  - `seek_right` - Time to seek for "right" key. (Default: `5`)
  - `seek_left` - Time to seek for "left" key. (Default: `-5`)
 
+### Shader Packs
+
+Shader packs allow you to import MPV config and shader presets into MPV Shim and easily switch
+between them at runtime through the built-in menu. This enables easy usage and switching of
+advanced MPV video playback options, such as video upscaling, while being easy to use.
+
+If you select one of the presets from the shader pack, it will override some MPV configurations
+and any shaders manually specified in `mpv.conf`. If you would like to customize the shader pack,
+use `shader_pack_custom`.
+
+ - `shader_pack_enable` - Enable shader pack. (Default: `true`)
+ - `shader_pack_custom` - Enable to use a custom shader pack. (Default: `false`)
+    - If you enable this, it will copy the default shader pack to the `shader_pack` config folder.
+    - This initial copy will only happen if the `shader_pack` folder didn't exist.
+    - This shader pack will then be used instead of the built-in one from then on.
+ - `shader_pack_remember` - Automatically remember the last used shader profile. (Default: `true`)
+ - `shader_pack_profile` - The default profile to use. (Default: `null`)
+    - If you use `shader_pack_remember`, this will be updated when you set a profile through the UI.
+
+### SVP Integration
+
+To enable SVP integration, set `svp_enable` to `true` and enable "External control via HTTP" within SVP
+under Settings > Control options. Adjust the `svp_url` and `svp_socket` settings if needed.
+
+ - `svp_enable` - Enable SVP integration. (Default: `false`)
+ - `svp_url` - URL for SVP web API. (Default: `http://127.0.0.1:9901/`)
+ - `svp_socket` - Custom MPV socket to use for SVP.
+    - Default on Windows: `mpvpipe`
+    - Default on other platforms: `/tmp/mpvsocket`
+
+Currently on Windows the built-in MPV does not work with SVP. You must download MPV yourself.
+
+ - Download the latest MPV build [from here](https://sourceforge.net/projects/mpv-player-windows/files/64bit/).
+ - Follow the [vapoursynth instructions](https://github.com/shinchiro/mpv-winbuild-cmake/wiki/Setup-vapoursynth-for-mpv).
+     - Make sure to use the latest Python, not Python 3.7.
+ - In the config file, set `mpv_ext` to `true` and `mpv_ext_path` to the path to `mpv.exe`.
+     - Make sure to use two backslashes per each backslash in the path.
+
+### SyncPlay
+
+You probably don't need to change these, but they are defined here in case you
+need to.
+
+ - `sync_max_delay_speed` - Delay in ms before changing video speed to sync playback. Default: `50`
+ - `sync_max_delay_skip` - Delay in ms before changing video speed to sync playback. Default: `300`
+ - `sync_method_thresh` - Delay in ms before switching sync method. Default: `2000`
+ - `sync_speed_time` - Duration in ms to change playback speed. Default: `1000`
+ - `sync_speed_attempts` - Number of attempts before speed changes are disabled. Default: `3`
+ - `sync_attempts` - Number of attempts before disabling sync play. Default: `5`
+ - `sync_revert_seek` - Attempt to revert seek via MPV OSC. Default: `true`
+     - This could break if you use revert-seek markers or scripts that use it.
+ - `sync_osd_message` - Write syncplay status messages to OSD. Default: `true`
+
 ### Other Configuration Options
 
  - `player_name` - The name of the player that appears in the cast menu. Initially set from your hostname.
@@ -210,6 +288,20 @@ You can reconfigure the custom keyboard shortcuts. You can also set them to `nul
     - If you are using the Windows build, you must download the desktop version.
  - `desktop_fullscreen` - Run the desktop client in fullscreen. Default: `false`
  - `desktop_remember_pos` - Remember the position of the desktop client. Default: `true`
+ - `desktop_scale` - Allows changing the scale factor for the desktop app. Default: `1.0`
+    - This can be useful if you are on a platform that doesn't support HiDPI very well.
+ - `sanitize_output` - Prevent the writing of server auth tokens to logs. Default: `true`
+ - `write_logs` - Write logs to the config directory for debugging. Default: `false`
+ - `playback_timeout` - Timeout to wait for MPV to start loading video in seconds. Default: `30`
+    - If you're hitting this, it means files on your server probably got corrupted or deleted.
+    - It could also happen if you try to play an unsupported video format. These are rare.
+ - `screenshot_menu` - Allow taking screenshots from menu. Default: `true`
+ - `check_updates` - Check for updates via GitHub. Default: `true`
+    - This requests the GitHub releases page and checks for a new version.
+    - Update checks are performed when playing media, once per day.
+ - `notify_updates` - Display update notification when playing media. Default: `true`
+    - Notification will only display once until the application is restarted. 
+ - `lang` - Allows overriding system locale. (Enter a language code.) Default: `null`
 
 ### MPV Configuration
 
@@ -343,6 +435,15 @@ On OSX, external MPV is already the default and is the only supported player mod
 In the long term, I may look into a method of terminating MPV when not in use. This will require
 a lot of changes to the software. 
 
+### Player Sizing (#91)
+
+MPV by default may force the window size to match the video aspect ratio, instead of allowing
+resizing and centering the video accordingly. Add the following to `mpv.conf` to enable resizing
+of the window freely, if desired:
+```
+no-keepaspect-window
+```
+
 ## Development
 
 If you'd like to run the application without installing it, run `./run.py`.
@@ -365,6 +466,9 @@ The API client was originally forked for this project and is now a [separate pac
 
 The css file for desktop mirroring is from [jellyfin-chromecast](https://github.com/jellyfin/jellyfin-chromecast/tree/5194d2b9f0120e0eb8c7a81fe546cb9e92fcca2b) and is subject to GPL v2.0.
 
+The shaders included in the shader pack are also available under verious open source licenses,
+[which you can read about here](https://github.com/iwalton3/default-shader-pack/blob/master/LICENSE.md).
+
 ### Local Dev Installation
 
 If you are on Windows there are additional dependencies. Please see the Windows Build Instructions.
@@ -376,6 +480,25 @@ If you are on Windows there are additional dependencies. Please see the Windows 
 5. Ensure you have a copy of `libmpv1` or `mpv` available.
 6. Install any platform-specific dependencies from the respective install tutorials.
 7. You should now be able to run the program with `./run.py` or `./run-desktop.py`. Installation is possible with `sudo pip3 install .`.
+
+### Translation
+
+This project uses gettext for translation. The current template language file is `base.pot` in `jellyfin_mpv_shim/messages/`.
+
+To regenerate `base.pot`:
+```bash
+pygettext --default-domain=base -o jellyfin_mpv_shim/messages/base.pot jellyfin_mpv_shim/*.py jellyfin_mpv_shim/**/*.py
+```
+
+To update an existing translation with new strings:
+```bash
+msgmerge --update jellyfin_mpv_shim/messages/es/LC_MESSAGES/base.po jellyfin_mpv_shim/messages/base.pot
+```
+
+To compile all `*.po` files to `*.mo`:
+```bash
+find -iname '*.po' | while read -r file; do msgfmt "$file" -o "${file%.*}.mo"; done
+```
 
 ## Linux Installation
 
@@ -466,4 +589,6 @@ You may also need to edit the batch file for 32 bit builds to point to the right
 8. (Edge Build, disabled by default) Rename the `*.nupkg` to a `*.zip` file and extract `lib\net462\Microsoft.Toolkit.Forms.UI.Controls.WebView.dll` to the project root.
 9. (CEF Desktop Client) Copy the folder `AppData\Local\Programs\Python\Python37\Lib\site-packages\cefpython3` to `cef\cefpython3`.
 10. Download the web [client build](https://github.com/iwalton3/jellyfin-web/releases/tag/jwc1.5.2) and unzip it into `jellyfin_mpv_shim\webclient_view\webclient`.
-11. Run `build-win.bat`.
+11. If you would like the shader pack included, [download it](https://github.com/iwalton3/default-shader-pack) and put the contents into `jellyfin_mpv_shim\default_shader_pack`.
+12. Remove `libEGL.dll` from `cef\cefpython3`, as it breaks mpv's glsl support. (How CEF works without this is a mystery to me.)
+13. Run `build-win.bat`.

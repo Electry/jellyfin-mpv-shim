@@ -23,6 +23,7 @@ import sys
 from threading import Event
 
 from ..clients import clientManager
+from ..player import playerManager
 from ..conf import settings
 from ..constants import USER_APP_NAME, APP_NAME
 from ..utils import get_resource
@@ -57,6 +58,12 @@ class Server(threading.Thread):
         def add_header(response):
             if request.path == "/index.html":
                 do_not_cache(response)
+                if settings.desktop_scale != 1.0:
+                    f_scale = float(settings.desktop_scale)
+                    response.make_sequence()
+                    response.set_data(response.get_data().replace(
+                        b"</body>", b"""<style>body { zoom: %.2f; }</style></body>""" % f_scale
+                    ))
                 return response
             if not response.cache_control.no_store:
                 response.cache_control.max_age = 2592000
@@ -86,6 +93,19 @@ class Server(threading.Thread):
                 "appName": USER_APP_NAME,
                 "deviceName": settings.player_name
             })
+            resp.status_code = 200
+            do_not_cache(resp)
+            return resp
+
+        @app.route('/mpv_shim_syncplay_join', methods=['POST'])
+        def mpv_shim_join():
+            if request.headers['Content-Type'] != 'application/json; charset=UTF-8':
+                return "Go Away"
+            req = request.json
+            client = list(clientManager.clients.values())[0]
+            playerManager.syncplay.client = client
+            playerManager.syncplay.join_group(req["GroupId"])
+            resp = jsonify({})
             resp.status_code = 200
             do_not_cache(resp)
             return resp

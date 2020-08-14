@@ -4,7 +4,7 @@ import sys
 import urllib.parse
 import time
 
-from threading import RLock, Lock
+from threading import RLock, Lock, Event
 from queue import Queue
 
 from . import conffile
@@ -12,6 +12,8 @@ from .utils import synchronous, Timer, none_fallback
 from .conf import settings
 from .menu import OSDMenu
 from .constants import APP_NAME
+from .syncplay import SyncPlayManager
+from .update_check import UpdateChecker
 
 log = logging.getLogger('player')
 mpv_log = logging.getLogger('mpv')
@@ -44,11 +46,38 @@ mpv_log_levels = {
     "info": mpv_log.info
 }
 
+
 def mpv_log_handler(level, prefix, text):
     if level in mpv_log_levels:
         mpv_log_levels[level]("{0}: {1}".format(prefix, text))
     else:
         mpv_log.debug("{0}: {1}".format(prefix, text))
+
+
+def wait_property(instance, name, cond=lambda x: True, timeout=None):
+    success = True
+    event = Event()
+
+    def handler(_name, value):
+        if cond(value):
+            event.set()
+
+    if is_using_ext_mpv:
+        observer_id = instance.bind_property_observer(name, handler)
+        if timeout:
+            success = event.wait(timeout=timeout)
+        else:
+            event.wait()
+        instance.unbind_property_observer(observer_id)
+    else:
+        instance.observe_property(name, handler)
+        if timeout:
+            success = event.wait(timeout=timeout)
+        else:
+            event.wait()
+        instance.unobserve_property(name, handler)
+    return success
+
 
 win_utils = None
 if sys.platform.startswith("win32") or sys.platform.startswith("cygwin"):
@@ -64,12 +93,9 @@ if sys.platform.startswith("win32") or sys.platform.startswith("cygwin"):
 
 class PlayerManager(object):
     """
-    Manages the relationship between a ``Player`` instance and a ``Media``
-    item.  This is designed to be used as a singleton via the ``playerManager``
-    instance in this module.  All communication between a caller and either the
-    current ``player`` or ``media`` instance should be done through this class
-    for thread safety reasons as all methods that access the ``player`` or
-    ``media`` are thread safe.
+    The underlying player is thread safe, however, locks are used in this
+    class to prevent concurrent control events hitting the player, which
+    violates assumptions.
     """
     def __init__(self):
         mpv_config = conffile.get(APP_NAME,"mpv.conf", True)
@@ -90,6 +116,9 @@ class PlayerManager(object):
         self.last_update = Timer()
         self._jf_settings = None
         self.get_webview = lambda: None
+        self.pause_ignore = None  # Used to ignore pause events that come from us.
+        self.last_seek = None
+        self.update_check = UpdateChecker(self)
 
         if is_using_ext_mpv:
             extra_options = {
@@ -103,6 +132,7 @@ class PlayerManager(object):
                                log_handler=mpv_log_handler, loglevel=settings.mpv_log_level,
                                **extra_options)
         self.menu = OSDMenu(self)
+        self.syncplay = SyncPlayManager(self)
 
         self._player['demuxer-max-bytes'] = '800000000';
 
@@ -137,8 +167,8 @@ class PlayerManager(object):
         @self._player.on_key_press('XF86_PREV')
         def handle_media_prev():
             if settings.media_key_seek:
-                seektime, _ = self.get_seek_times()
-                self._player.command("seek", seektime)
+                seektime, _x = self.get_seek_times()
+                self.seek(seektime)
             else:
                 self.put_task(self.play_prev)
 
@@ -146,8 +176,8 @@ class PlayerManager(object):
         @self._player.on_key_press('XF86_NEXT')
         def handle_media_next():
             if settings.media_key_seek:
-                _, seektime = self.get_seek_times()
-                self._player.command("seek", seektime)
+                _x, seektime = self.get_seek_times()
+                self.seek(seektime)
             else:
                 self.put_task(self.play_next)
 
@@ -184,9 +214,9 @@ class PlayerManager(object):
             else:
                 seektime = settings.seek_left
                 if settings.use_web_seek:
-                    seektime, _ = self.get_seek_times()
-                self._player.command("seek", seektime)
-        
+                    seektime, _x = self.get_seek_times()
+                self.seek(seektime)
+
         @keypress(settings.kb_menu_right)
         def menu_right():
             if self.menu.is_menu_shown:
@@ -194,22 +224,22 @@ class PlayerManager(object):
             else:
                 seektime = settings.seek_right
                 if settings.use_web_seek:
-                    _, seektime = self.get_seek_times()
-                self._player.command("seek", seektime)
+                    _x, seektime = self.get_seek_times()
+                self.seek(seektime)
 
         @keypress(settings.kb_menu_up)
         def menu_up():
             if self.menu.is_menu_shown:
                 self.menu.menu_action('up')
             else:
-                self._player.command("seek", settings.seek_up)
+                self.seek(settings.seek_up)
 
         @keypress(settings.kb_menu_down)
         def menu_down():
             if self.menu.is_menu_shown:
                 self.menu.menu_action('down')
             else:
-                self._player.command("seek", settings.seek_down)
+                self.seek(settings.seek_down)
 
         @keypress(settings.kb_pause)
         def handle_pause():
@@ -232,11 +262,41 @@ class PlayerManager(object):
                 self.put_task(self.finished_callback, has_lock)
 
         # Fires at the end.
-        @self._player.event_callback('idle')
-        def handle_end_idle(event):
-            if self._video:
+        @self._player.property_observer('playback-abort')
+        def handle_end_idle(name, value):
+            if self._video and value:
                 has_lock = self._finished_lock.acquire(False)
                 self.put_task(self.finished_callback, has_lock)
+
+        @self._player.property_observer("seeking")
+        def handle_seeking(name, value):
+            if self.syncplay.is_enabled():
+                play_time = self._player.playback_time
+                if (play_time is not None and self.last_seek is not None
+                        and abs(self.last_seek - play_time) > 10):
+                    log.info("Reverting sync for syncplay.")
+                    self._player.command("revert-seek")
+                    self.syncplay.seek_request(play_time)
+                else:
+                    log.debug("SyncPlay Buffering: {0}".format(value))
+                    if value:
+                        self.syncplay.on_buffer()
+                    else:
+                        self.syncplay.on_buffer_done()
+
+        @self._player.property_observer("pause")
+        def pause_handler(_name, value):
+            if not self._player.playback_abort:
+                self.timeline_handle()
+
+            if value != self.pause_ignore:
+                if self.syncplay.is_enabled():
+                    if value:
+                        self.syncplay.pause_request()
+                    else:
+                        # Don't allow unpausing locally through MPV.
+                        self.syncplay.play_request()
+                        self.set_paused(True, True)
 
     # Put a task to the event queue.
     # This ensures the task executes outside
@@ -261,7 +321,7 @@ class PlayerManager(object):
             if not self.is_paused():
                 self.last_update.restart()
 
-    def play(self, video, offset=0):
+    def play(self, video, offset=0, no_initial_timeline=False):
         self.should_send_timeline = False
         self.start_time = time.time()
         url = video.get_playback_url()
@@ -269,10 +329,10 @@ class PlayerManager(object):
             log.error("PlayerManager::play no URL found")
             return
 
-        self._play_media(video, url, offset)
+        self._play_media(video, url, offset, no_initial_timeline)
 
     @synchronous('_lock')
-    def _play_media(self, video, url, offset=0):
+    def _play_media(self, video, url, offset=0, no_initial_timeline=False):
         self.url = url
         self.menu.hide_menu()
 
@@ -283,7 +343,12 @@ class PlayerManager(object):
             self.get_webview().hide()
 
         self._player.play(self.url)
-        self._player.wait_for_property("duration")
+        if not wait_property(self._player, "duration", lambda x: x is not None, settings.playback_timeout):
+            # Timeout playback attempt after 10 seconds
+            log.error("Timeout when waiting for media duration. Stopping playback!")
+            self.stop()
+            return
+        log.debug("Finished waiting for media duration.")
         if settings.fullscreen:
             self._player.fs = True
         self._player.force_media_title = video.get_proper_title()
@@ -299,13 +364,17 @@ class PlayerManager(object):
             win_utils.raise_mpv()
 
         if offset is not None and offset > 0:
+            self.last_seek = offset
             self._player.playback_time = offset
 
-        self.send_timeline_initial()
-        self._player.pause = False
+        if not no_initial_timeline:
+            self.send_timeline_initial()
+        self.set_paused(False, False)
         self.should_send_timeline = True
         if self._finished_lock.locked():
             self._finished_lock.release()
+
+        self.update_check.check()
 
     def exec_stop_cmd(self):
         if settings.stop_cmd:
@@ -319,11 +388,14 @@ class PlayerManager(object):
 
         log.debug("PlayerManager::stop stopping playback of %s" % self._video)
 
+        if self.syncplay.is_enabled():
+            self.syncplay.disable_sync_play(False)
+
         self._video.terminate_transcode()
         self.send_timeline_stopped()
         self._video = None
         self._player.command("stop")
-        self._player.pause = False
+        self.set_paused(False)
         self.exec_stop_cmd()
 
     def get_volume(self, percent=False):
@@ -335,30 +407,41 @@ class PlayerManager(object):
     @synchronous('_lock')
     def toggle_pause(self):
         if not self._player.playback_abort:
-            self._player.pause = not self._player.pause
-        self.timeline_handle()
+            self.set_paused(not self._player.pause)
 
     @synchronous('_lock')
     def pause_if_playing(self):
         if not self._player.playback_abort:
             if not self._player.pause:
-                self._player.pause = not self._player.pause
+                self.set_paused(True)
         self.timeline_handle()
 
     @synchronous('_lock')
     def play_if_paused(self):
         if not self._player.playback_abort:
             if self._player.pause:
-                self._player.pause = not self._player.pause
+                self.set_paused(False)
         self.timeline_handle()
 
     @synchronous('_lock')
-    def seek(self, offset):
+    def seek(self, offset, absolute=False, force=False):
         """
         Seek to ``offset`` seconds
         """
-        if not self._player.playback_abort:
-            self._player.playback_time = offset
+        if self.syncplay.is_enabled() and not force:
+            if not absolute:
+                offset += self._player.playback_time
+            self.syncplay.seek_request(offset)
+        else:
+            if not self._player.playback_abort:
+                if absolute:
+                    if self.syncplay.is_enabled():
+                        self.last_seek = offset
+                    self._player.playback_time = offset
+                else:
+                    if self.syncplay.is_enabled():
+                        self.last_seek = self._player.playback_time + offset
+                    self._player.command("seek", offset)
         self.timeline_handle()
 
     @synchronous('_lock')
@@ -399,6 +482,8 @@ class PlayerManager(object):
             if settings.media_ended_cmd:
                 os.system(settings.media_ended_cmd)
             log.debug("PlayerManager::finished_callback reached end")
+            if self.syncplay.is_enabled():
+                self.syncplay.disable_sync_play(False)
             self.send_timeline_stopped()
 
     @synchronous('_lock')
@@ -421,6 +506,8 @@ class PlayerManager(object):
     @synchronous('_lock')
     def play_next(self):
         if self._video.parent.has_next:
+            if self.syncplay.is_enabled():
+                self.syncplay.disable_sync_play(False)
             self.play(self._video.parent.get_next().video)
             return True
         return False
@@ -429,6 +516,8 @@ class PlayerManager(object):
     def skip_to(self, key):
         media = self._video.parent.get_from_key(key)
         if media:
+            if self.syncplay.is_enabled():
+                self.syncplay.disable_sync_play(False)
             self.play(media.get_video(0))
             return True
         return False
@@ -436,6 +525,8 @@ class PlayerManager(object):
     @synchronous('_lock')
     def play_prev(self):
         if self._video.parent.has_prev:
+            if self.syncplay.is_enabled():
+                self.syncplay.disable_sync_play(False)
             self.play(self._video.parent.get_prev().video)
             return True
         return False
@@ -509,6 +600,17 @@ class PlayerManager(object):
     def screenshot(self):
         self._player.screenshot()
 
+    @synchronous('_lock')
+    def set_paused(self, value: bool, force=False):
+        if self.syncplay.is_enabled() and not force:
+            if value:
+                self.syncplay.pause_request()
+            else:
+                self.syncplay.play_request()
+        else:
+            self.pause_ignore = value
+            self._player.pause = value
+
     def get_track_ids(self):
         return self._video.aid, self._video.sid
 
@@ -519,18 +621,20 @@ class PlayerManager(object):
         self.timeline_handle()
     
     def get_timeline_options(self):
-        # PlaylistItemId is dynamicallt generated. A more stable Id will be used
+        # PlaylistItemId is dynamically generated. A more stable Id will be used
         # if queue manipulation is added as a feature.
         player = self._player
         safe_pos = player.playback_time or 0
+        self.last_seek = safe_pos
+        self.pause_ignore = player.pause
         options = {
             "VolumeLevel": int(player.volume or 100),
             "IsMuted": player.mute,
             "IsPaused": player.pause,
             "RepeatMode": "RepeatNone",
             #"MaxStreamingBitrate": 140000000,
-            "PositionTicks": int(safe_pos * 1000) * 10000,
-            "PlaybackStartTimeTicks": int(self.start_time * 1000) * 10000,
+            "PositionTicks": int(safe_pos * 10000000),
+            "PlaybackStartTimeTicks": int(self.start_time * 10000000),
             "SubtitleStreamIndex": none_fallback(self._video.sid, -1),
             "AudioStreamIndex": none_fallback(self._video.aid, -1),
             "BufferedRanges":[],
@@ -544,8 +648,8 @@ class PlayerManager(object):
         }
         if player.duration is not None:
             options["BufferedRanges"] = [{
-                "start": int(safe_pos * 1000) * 10000,
-                "end": int(((player.duration - safe_pos * none_fallback(player.cache_buffering_state, 0) / 100) + safe_pos) * 1000) * 10000
+                "start": int(safe_pos * 10000000),
+                "end": int(((player.duration - safe_pos * none_fallback(player.cache_buffering_state, 0) / 100) + safe_pos) * 10000000)
             }]
         return options
 
@@ -553,6 +657,8 @@ class PlayerManager(object):
     def send_timeline(self):
         if self.should_send_timeline and self._video and not self._player.playback_abort:
             self._video.client.jellyfin.session_progress(self.get_timeline_options())
+            if self.syncplay.is_enabled():
+                self.syncplay.sync_playback_time()
 
     @synchronous('_tl_lock')
     def send_timeline_initial(self):

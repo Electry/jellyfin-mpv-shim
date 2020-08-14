@@ -4,6 +4,7 @@ from .conf import settings
 from . import conffile
 from getpass import getpass
 from .constants import CLIENT_VERSION, USER_APP_NAME, USER_AGENT, APP_NAME
+from .i18n import _
 
 import sys
 import os.path
@@ -41,21 +42,21 @@ class ClientManager(object):
             add_another = True
 
         while not is_logged_in or add_another:
-            server = input("Server URL: ")
-            username = input("Username: ")
-            password = getpass("Password: ")
+            server = input(_("Server URL: "))
+            username = input(_("Username: "))
+            password = getpass(_("Password: "))
 
             is_logged_in = self.login(server, username, password)
 
             if is_logged_in:
-                log.info("Successfully added server.")
-                add_another = input("Add another server? [y/N] ")
+                log.info(_("Successfully added server."))
+                add_another = input(_("Add another server? [y/N] "))
                 add_another = add_another in ("y", "Y", "yes", "Yes")
             else:
-                log.warning("Adding server failed.")
+                log.warning(_("Adding server failed."))
 
     def client_factory(self):
-        client = JellyfinClient()
+        client = JellyfinClient(allow_multiple_clients=True)
         client.config.data['app.default'] = True
         client.config.app(USER_APP_NAME, CLIENT_VERSION, settings.player_name, settings.client_uuid)
         client.config.data['http.user_agent'] = USER_AGENT
